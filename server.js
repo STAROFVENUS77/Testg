@@ -12,7 +12,7 @@ app.use(cors());
 const streams = {
   hbofamily: {
     url: 'https://smart.pendy.dpdns.org/Smart.php?id=Hbofamily',
-    logo: 'https://upload.wikimedia.org/wikipedia/commons/6/6e/HBO_Family_Asia_logo.png'
+    logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQmgLxceKZ0vlSSViPM1Tp3p_U8DOBhBQavlRPttTrkpA&s'
   },
   hbohd: {
     url: 'https://smart.pendy.dpdns.org/Smart.php?id=Hbo',
