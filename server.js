@@ -1,0 +1,286 @@
+// server.js — optimized IPTV proxy for HLS playlists + segments
+'use strict';
+
+const express = require('express');
+const got = require('got');
+const cors = require('cors');
+const helmet = require('helmet');
+const compression = require('compression');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
+const LRU = require('lru-cache');
+const { URL } = require('url');
+
+const app = express();
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
+const PLAYLIST_CACHE_MS = Number(process.env.PLAYLIST_CACHE_MS || 10_000); // 10s default
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 10_000); // 10s
+
+// --- middlewares ---
+app.use(helmet());
+app.use(cors());
+app.use(compression());
+app.use(express.json());
+app.use(morgan('combined'));
+
+// simple rate limiter to avoid abuse
+const limiter = rateLimit({
+  windowMs: 15 * 1000, // 15s
+  max: 60, // 60 requests per window per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(limiter);
+
+// --- simple LRU cache for playlists (string keyed by original URL) ---
+const playlistCache = new LRU({
+  max: 500,
+  ttl: PLAYLIST_CACHE_MS,
+});
+
+// your streams object: keep { url, logo } shape
+const streams = {
+  hbofamily: {
+    url: 'https://smart.pendy.dpdns.org/Smart.php?id=Hbofamily',
+    logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQmgLxceKZ0vlSSViPM1Tp3p_U8DOBhBQavlRPttTrkpA&s'
+  },
+  hbohd: {
+    url: 'https://smart.pendy.dpdns.org/Smart.php?id=Hbo',
+    logo: 'https://upload.wikimedia.org/wikipedia/commons/d/d0/HBO_logo.svg'
+  },
+  // ... add the rest
+};
+
+// helper: validate stream key and return stream object
+function getStream(key) {
+  if (!key || typeof key !== 'string') return null;
+  return streams[key] || null;
+}
+
+// helper: resolve relative lines to absolute URLs using playlist base
+function resolveUrl(line, base) {
+  try {
+    return new URL(line, base).href;
+  } catch (e) {
+    return null;
+  }
+}
+
+// --- route: serve channel playlist rewritten to proxy segment.ts ---
+app.get('/:stream/playlist.m3u8', async (req, res) => {
+  const key = req.params.stream;
+  const stream = getStream(key);
+  if (!stream) return res.status(404).send('❌ Invalid stream key');
+
+  const upstream = stream.url;
+
+  // caching layer: return cached playlist if fresh
+  const cacheKey = `playlist:${upstream}`;
+  const cached = playlistCache.get(cacheKey);
+  if (cached) {
+    res.set('Content-Type', 'application/vnd.apple.mpegurl');
+    return res.send(cached);
+  }
+
+  try {
+    const response = await got(upstream, {
+      timeout: { request: REQUEST_TIMEOUT_MS },
+      retry: { limit: 1 },
+      throwHttpErrors: false,
+    });
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      console.warn(`Upstream returned ${response.statusCode} for ${upstream}`);
+      return res.status(502).send('❌ Failed to fetch playlist');
+    }
+
+    const body = response.body.toString('utf8');
+    // determine base path for resolving relative URIs
+    let base;
+    try {
+      const u = new URL(upstream);
+      base = u.href.substring(0, u.href.lastIndexOf('/') + 1);
+    } catch (e) {
+      base = upstream;
+    }
+
+    // Rewrite logic:
+    // - convert any non-comment line that looks like a relative or absolute segment -> /segment.ts?url=encoded
+    // - also handle EXT-X-KEY:...URI="..." to rewrite the encryption key URI to pass through segment proxy (or a key proxy)
+    const rewritten = body.split(/\r?\n/).map(line => {
+      if (!line || line.startsWith('#')) {
+        // special-case: rewrite URI inside EXT-X-KEY if present
+        if (line.startsWith('#EXT-X-KEY')) {
+          // Find URI="...":
+          const uriMatch = line.match(/URI="([^"]+)"/i);
+          if (uriMatch && uriMatch[1]) {
+            const orig = uriMatch[1];
+            const abs = resolveUrl(orig, base) || orig;
+            const proxied = `/segment.ts?url=${encodeURIComponent(abs)}&type=key`;
+            return line.replace(/URI="[^"]+"/i, `URI="${proxied}"`);
+          }
+        }
+        return line;
+      }
+
+      // non-comment line — assume it's a media or playlist URI
+      const abs = resolveUrl(line.trim(), base);
+      if (!abs) return line;
+      return `/segment.ts?url=${encodeURIComponent(abs)}`;
+    }).join('\n');
+
+    // cache rewritten playlist
+    playlistCache.set(cacheKey, rewritten);
+
+    res.set('Content-Type', 'application/vnd.apple.mpegurl');
+    // allow client caching small time but not too long
+    res.set('Cache-Control', 'public, max-age=5');
+    return res.send(rewritten);
+  } catch (err) {
+    console.error('Error fetching playlist', err?.message || err);
+    return res.status(502).send('❌ Error fetching playlist');
+  }
+});
+
+// --- route: stream segments (ts, key, other resources) ---
+app.get('/segment.ts', async (req, res) => {
+  const { url: encodedUrl, type } = req.query;
+  if (!encodedUrl) return res.status(400).send('❌ No segment URL');
+
+  let segmentUrl;
+  try {
+    segmentUrl = decodeURIComponent(encodedUrl);
+  } catch (e) {
+    return res.status(400).send('❌ Bad segment URL encoding');
+  }
+
+  // optional: only allow common hosts or add allowlist logic if you want
+  try {
+    // stream upstream resource and pipe to client
+    const upstreamStream = got.stream(segmentUrl, {
+      timeout: { request: REQUEST_TIMEOUT_MS },
+      retry: { limit: 1 },
+      headers: {
+        // forward some client identifying headers safely (optional)
+        'User-Agent': req.get('User-Agent') || 'IPTV-Proxy',
+        'Accept': req.get('Accept') || '*/*',
+      }
+    });
+
+    // handle errors from upstream
+    upstreamStream.on('response', upstreamRes => {
+      // forward important headers (content-type, content-length, accept-ranges)
+      const headersToCopy = ['content-type', 'content-length', 'accept-ranges', 'cache-control', 'last-modified'];
+      headersToCopy.forEach(h => {
+        const val = upstreamRes.headers[h];
+        if (val) res.set(h, val);
+      });
+
+      // set safe cache-control for keys/media
+      if (String(type) === 'key') {
+        // don't cache sensitive keys
+        res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+      } else {
+        // let client cache tiny amount
+        res.set('Cache-Control', 'public, max-age=5');
+      }
+      // status code pass-through
+      res.status(upstreamRes.statusCode);
+    });
+
+    upstreamStream.on('error', err => {
+      console.warn('Upstream stream error', err?.message || err);
+      if (!res.headersSent) res.status(502).send('❌ Segment failed');
+      else res.end();
+    });
+
+    // pipe upstream to client
+    upstreamStream.pipe(res);
+  } catch (err) {
+    console.error('Segment proxy error', err?.message || err);
+    return res.status(502).send('❌ Segment proxy error');
+  }
+});
+
+// --- route: simple home page with logos & frontend player (unchanged but safer) ---
+app.get('/', (req, res) => {
+  const channelsHtml = Object.keys(streams).map(key => {
+    const s = streams[key];
+    return `
+      <div class="channel" tabindex="0" role="button" onclick="playChannel('${encodeURIComponent(key)}')">
+        <img src="${s.logo}" alt="${key}" loading="lazy">
+        <span>${key}</span>
+      </div>
+    `;
+  }).join('');
+
+  res.send(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IPTV Home</title>
+<style>
+  body{background:#111;color:#fff;margin:0;font-family:sans-serif}
+  #channelList{display:flex;flex-wrap:wrap;gap:10px;padding:10px}
+  .channel{background:#222;padding:8px;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;width:140px;text-align:center;transition:transform .12s}
+  .channel:hover,.channel:focus{transform:scale(1.04);background:#333}
+  .channel img{width:120px;height:68px;object-fit:contain;border-radius:4px;background:#000}
+  video{width:100%;height:auto;background:black}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/4.9.2/shaka-player.compiled.min.js"></script>
+</head>
+<body>
+<h2 style="padding:10px">📺 IPTV Home</h2>
+<div id="playerContainer" style="display:none;padding:10px">
+  <video id="video" autoplay controls playsinline></video>
+  <button onclick="closePlayer()" style="margin-top:8px">Close</button>
+</div>
+<div id="channelList">${channelsHtml}</div>
+<script>
+async function playChannel(key) {
+  key = decodeURIComponent(key);
+  document.getElementById('channelList').style.display = 'none';
+  document.getElementById('playerContainer').style.display = 'block';
+  const manifestUri = '/' + key + '/playlist.m3u8';
+  const video = document.getElementById('video');
+  // destroy previous player if exists
+  if (window._shakaPlayer) { try { window._shakaPlayer.destroy(); } catch(e){} }
+  const player = new shaka.Player(video);
+  window._shakaPlayer = player;
+  player.addEventListener('error', e => {
+    console.error('Shaka error', e.detail);
+    // attempt reload after short backoff
+    setTimeout(()=>player.load(manifestUri).catch(()=>{}), 2000);
+  });
+  try {
+    await player.load(manifestUri);
+    console.log('Loaded', manifestUri);
+  } catch (err) {
+    console.error('Failed load', err);
+    alert('Failed to load stream');
+    closePlayer();
+  }
+}
+function closePlayer(){
+  document.getElementById('playerContainer').style.display = 'none';
+  document.getElementById('channelList').style.display = 'flex';
+  if (window._shakaPlayer) { try { window._shakaPlayer.destroy(); window._shakaPlayer = null; } catch(e){} }
+}
+</script>
+</body>
+</html>`);
+});
+
+// graceful shutdown
+function shutdown() {
+  console.log('Shutting down...');
+  process.exit(0);
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+
+// start server
+app.listen(PORT, () => {
+  console.log(`✅ Server listening on port ${PORT}`);
+});
