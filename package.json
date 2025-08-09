@@ -1,28 +1,36 @@
 {
-  "name": "iptv-proxy",
+  "name": "iptv-shaka-server",
   "version": "1.0.0",
-  "description": "Express IPTV proxy server with Shaka Player home channel support",
+  "description": "Optimized IPTV streaming proxy with Shaka Player support and ClearKey DRM",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": [
-    "iptv",
-    "express",
-    "shaka-player",
-    "hls",
-    "dash",
-    "proxy"
-  ],
-  "author": "Your Name",
+  "author": "example",
   "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.18.2",
+    "express": "^4.19.2",
     "request": "^2.88.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "iptv",
+    "express",
+    "shaka-player",
+    "clearkey",
+    "hls",
+    "drm",
+    "proxy"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/example/iptv-shaka-server.git"
   }
 }
