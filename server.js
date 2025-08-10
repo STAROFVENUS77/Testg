@@ -86,7 +86,8 @@ async function pipeStream(target, res, contentType) {
     const stream = got.stream(url, {
       timeout: { request: 15000 },
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Render Restreamer)',
+        'User-Agent': '
+Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
         'Referer': url.origin
       }
     });
