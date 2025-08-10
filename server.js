@@ -1,67 +1,105 @@
-// server.js — DASH MPD Restream Proxy for Render
+// server.js — HLS Restreamer with preset channels & playlist rewriting
 'use strict';
 
 const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
 const got = require('got');
 const { URL } = require('url');
-const cors = require('cors');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
+app.use(morgan('dev'));
 
-// Original MPD URL
-const MPD_URL = 'https://cdn-uw2-prod.tsv2.amagi.tv/linear/amg01006-abs-cbn-abscbn-gma-x7-dash-abscbnono/7c693236-e0c1-40a3-8bd0-bb25e43f5bfc/index.mpd';
+// Preset channel list
+const channels = {
+  cinemo: 'https://d1bail49udbz1k.cloudfront.net/out/v1/78e282e04f0944f3ad0aa1db7a1be645/index_3.m3u8',
+  kidsflix: 'https://stream-us-east-1.getpublica.com/playlist.m3u8?network_id=50',
+  cartoonnetwork: 'https://nxt.plus:8443/live/restreamstalker/mzfJKHLK86fy/118123.m3u8',
+  disneyjr: 'https://nxt.plus:8443/live/restreamstalker/mzfJKHLK86fy/118127.m3u8',
+  nickelodeon: 'https://nxt.plus:8443/live/restreamstalker/mzfJKHLK86fy/118128.m3u8',
+  disneychannel: 'https://nxt.plus:8443/live/restreamstalker/mzfJKHLK86fy/118124.m3u8'
+};
 
-// Serve rewritten MPD
-app.get('/index.mpd', async (req, res) => {
-  try {
-    const mpdResponse = await got(MPD_URL, { responseType: 'text' });
-    let mpdContent = mpdResponse.body;
-
-    // Base path of the original MPD
-    const basePath = new URL(MPD_URL).origin + new URL(MPD_URL).pathname.replace(/\/[^\/]+$/, '/');
-
-    // 1. Rewrite media & initialization attributes
-    mpdContent = mpdContent.replace(/(media|initialization)="([^"]+)"/g, (_, attr, path) => {
-      const absUrl = new URL(path, basePath).href;
-      return `${attr}="/segment?url=${encodeURIComponent(absUrl)}"`;
-    });
-
-    // 2. Rewrite BaseURL tags
-    mpdContent = mpdContent.replace(/<BaseURL>(.*?)<\/BaseURL>/g, (_, path) => {
-      const absUrl = new URL(path, basePath).href;
-      return `<BaseURL>/segment?url=${encodeURIComponent(absUrl)}</BaseURL>`;
-    });
-
-    res.setHeader('Content-Type', 'application/dash+xml');
-    res.send(mpdContent);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Failed to fetch MPD');
-  }
+// Root
+app.get('/', (req, res) => {
+  res.json({
+    message: '✅ IPTV Restreamer running',
+    available_channels: Object.keys(channels)
+  });
 });
 
-// Serve proxied segments
-app.get('/segment', async (req, res) => {
-  const segmentUrl = req.query.url;
-  if (!segmentUrl) return res.status(400).send('Missing url parameter');
+// Generic playlist proxy with URL param
+app.get('/playlist', async (req, res) => {
+  const target = req.query.url;
+  if (!target) return res.status(400).send('Missing url');
+  await sendPlaylist(target, req, res);
+});
 
+// Segment proxy
+app.get('/segment', async (req, res) => {
+  const target = req.query.url;
+  if (!target) return res.status(400).send('Missing url');
+  await pipeStream(target, res, 'video/mp2t');
+});
+
+// Create endpoints for each preset channel
+Object.entries(channels).forEach(([name, url]) => {
+  app.get(`/${name}`, async (req, res) => {
+    await sendPlaylist(url, req, res);
+  });
+});
+
+// Helper: Send playlist with segment URL rewrite
+async function sendPlaylist(target, req, res) {
   try {
-    const stream = got.stream(segmentUrl);
-    stream.on('error', (err) => {
-      console.error(`Segment fetch error: ${err.message}`);
-      res.destroy();
+    const url = new URL(target);
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    const body = await got(url, {
+      timeout: { request: 15000 },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Render Restreamer)',
+        'Referer': url.origin
+      }
+    }).text();
+
+    // Rewrite all segment URLs to go through /segment
+    const rewritten = body.replace(
+      /^(?!#)(.*\.ts.*)$/gm,
+      seg => `/segment?url=${new URL(seg, url).href}`
+    );
+
+    res.send(rewritten);
+  } catch (err) {
+    console.error(`Playlist error for ${target}:`, err.message);
+    res.status(500).send('Error fetching playlist');
+  }
+}
+
+// Helper: Pipe binary stream
+async function pipeStream(target, res, contentType) {
+  try {
+    const url = new URL(target);
+    res.setHeader('Content-Type', contentType);
+    const stream = got.stream(url, {
+      timeout: { request: 15000 },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Render Restreamer)',
+        'Referer': url.origin
+      }
+    });
+    stream.on('error', err => {
+      console.error('Segment fetch error:', err.message);
+      res.end();
     });
     stream.pipe(res);
   } catch (err) {
-    console.error(err);
-    res.status(500).send('Failed to fetch segment');
+    res.status(500).send('Error streaming segment');
   }
-});
+}
 
 app.listen(PORT, () => {
-  console.log(`✅ DASH restream server running on port ${PORT}`);
-  console.log(`📺 Access MPD at: http://localhost:${PORT}/index.mpd`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
