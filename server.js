@@ -1,4 +1,4 @@
-
+// server.js — DASH MPD Restream Proxy for Render
 'use strict';
 
 const express = require('express');
@@ -9,7 +9,6 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Enable CORS
 app.use(cors());
 
 // Original MPD URL
@@ -21,11 +20,19 @@ app.get('/index.mpd', async (req, res) => {
     const mpdResponse = await got(MPD_URL, { responseType: 'text' });
     let mpdContent = mpdResponse.body;
 
-    // Convert relative segment URLs to go through our proxy
-    const baseUrl = new URL(MPD_URL).origin + new URL(MPD_URL).pathname.replace(/\/[^\/]+$/, '/');
-    mpdContent = mpdContent.replace(/(media|initialization)="([^"]+)"/g, (match, attr, path) => {
-      const absUrl = new URL(path, baseUrl).href;
+    // Base path of the original MPD
+    const basePath = new URL(MPD_URL).origin + new URL(MPD_URL).pathname.replace(/\/[^\/]+$/, '/');
+
+    // 1. Rewrite media & initialization attributes
+    mpdContent = mpdContent.replace(/(media|initialization)="([^"]+)"/g, (_, attr, path) => {
+      const absUrl = new URL(path, basePath).href;
       return `${attr}="/segment?url=${encodeURIComponent(absUrl)}"`;
+    });
+
+    // 2. Rewrite BaseURL tags
+    mpdContent = mpdContent.replace(/<BaseURL>(.*?)<\/BaseURL>/g, (_, path) => {
+      const absUrl = new URL(path, basePath).href;
+      return `<BaseURL>/segment?url=${encodeURIComponent(absUrl)}</BaseURL>`;
     });
 
     res.setHeader('Content-Type', 'application/dash+xml');
