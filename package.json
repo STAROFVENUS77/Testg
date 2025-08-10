@@ -1,18 +1,17 @@
 {
-  "name": "dash-mpd-restream",
+  "name": "m3u8-restream",
   "version": "1.0.0",
-  "description": "DASH MPD restream proxy for Render",
+  "description": "HLS m3u8 restream server for Render",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "engines": {
+    "node": "18.x"
+  },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "got": "^14.4.1"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "license": "MIT"
+    "express": "^4.18.2",
+    "got": "^12.6.1"
+  }
 }
