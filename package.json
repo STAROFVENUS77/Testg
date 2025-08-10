@@ -1,29 +1,18 @@
 {
-  "name": "iptv-proxy-shaka",
+  "name": "dash-mpd-restream",
   "version": "1.0.0",
-  "description": "Optimized IPTV streaming proxy with Shaka player frontend",
+  "description": "DASH MPD restream proxy for Render",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "NODE_ENV=development nodemon server.js"
+    "start": "node server.js"
   },
-  "keywords": ["iptv", "hls", "m3u8", "shaka-player", "express", "proxy"],
-  "author": "",
-  "license": "MIT",
   "dependencies": {
-    "compression": "^1.7.4",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "got": "^12.6.0",
-    "helmet": "^7.0.0",
-    "lru-cache": "^12.4.0",
-    "morgan": "^1.10.0",
-    "express-rate-limit": "^6.7.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.0"
+    "got": "^14.4.1"
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "license": "MIT"
 }
