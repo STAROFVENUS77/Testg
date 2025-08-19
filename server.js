@@ -78,7 +78,7 @@ app.get('/segment.ts', (req, res) => {
 
 // 🌐 Root
 app.get('/', (req, res) => {
-  res.send('⭐ STAR OF VENUS ⭐ – Secure Proxy Server Running');
+  res.send('⭐ STAR OF VENUS ⭐');
 });
 
 // 🚀 Start server
