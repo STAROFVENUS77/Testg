@@ -1,23 +1,30 @@
 {
-  "name": "m3u8-restream",
+  "name": "secure-stream-proxy",
   "version": "1.0.0",
-  "description": "HLS/DASH restreamer with playlist rewriting (suitable for Render)",
+  "description": "Secure HLS stream proxy server with tokenized segments",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "start:dev": "NODE_ENV=development nodemon server.js"
-  },
-  "engines": {
-    "node": "18.x"
+    "dev": "nodemon server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "got": "^12.6.1",
-    "morgan": "^1.10.0"
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "request": "^2.88.2"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "nodemon": "^3.1.0"
   },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "hls",
+    "proxy",
+    "streaming",
+    "express",
+    "m3u8"
+  ],
   "license": "MIT"
 }
